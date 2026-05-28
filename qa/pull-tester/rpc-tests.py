@@ -160,6 +160,8 @@ NEW_SCRIPTS= [
     # vv Tests less than 2m vv
     # vv Tests less than 60s vv
     'addnode.py',
+    'wallet_z_shieldcoinbase.py',
+    'wallet_z_shieldcoinbase_multi_taddr.py',
     # vv Tests less than 30s vv
     'feature_nu6.py',
     'feature_backup_non_finalized_state.py',
