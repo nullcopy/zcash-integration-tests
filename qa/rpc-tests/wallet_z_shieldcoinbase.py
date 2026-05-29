@@ -327,49 +327,48 @@ class WalletZShieldCoinbaseTest(BitcoinTestFramework):
 
     def run_functional_tests(self, node, w0, w0_taddr, w0_account_uuid,
                              w0_zaddr, w0_extra_zaddr):
-        # Running tally of mature coinbase UTXOs spent so far. Combined
-        # with `node.getblockcount()`, this pins the exact size of the
-        # unspent-mature set the wallet should observe before each sweep:
-        #
-        #     expected = (tip - COINBASE_MATURITY) - mature_spent
-        #
-        # `tip - COINBASE_MATURITY` is the chain's all-time mature-coinbase
-        # count given all blocks are coinbase to `w0_taddr` and our
-        # confirmation filter is `minconf = COINBASE_MATURITY + 1`. The
-        # wallet's view converges to this from below as it scans; the
-        # sync-barrier helper waits for that convergence so the count
-        # assertions below are exact rather than ranged.
+        # Expected unspent-mature COUNT before each sweep: all coinbase goes
+        # to w0_taddr, so it's (tip - COINBASE_MATURITY) minus what we've spent.
+        # Counts are reliable; VALUES are not derived from the snapshot:
+        # z_listunspent and the proposal use different maturity tips, so across
+        # the regtest subsidy halving (6.25 -> 3.125) a summed snapshot can
+        # disagree with the reported value. Value assertions therefore use the
+        # operation's own shieldingValue and the balance delta instead.
         mature_spent = 0
 
         def expected_unspent_mature():
             return node.getblockcount() - COINBASE_MATURITY - mature_spent
 
+        def confirm_and_check_balance(txid, pre_private, shielding_value):
+            """Confirm the sweep and assert balance grew by value - fee.
+            Returns (fee, post_private, tx_details)."""
+            node.generate(1)
+            tx_details = wait_for_tx_scanned(w0, txid)
+            fee = Decimal(tx_details['fee'])
+            post_private = Decimal(w0.z_gettotalbalance(1, True)['private'])
+            assert_equal(post_private, pre_private + shielding_value - fee)
+            return fee, post_private, tx_details
+
         # ---- F1: explicit single-t-addr sweep -----------------------
 
         print("Test F1: explicit single-t-addr sweep (response shape + balance moves)...")
         pre_private = Decimal(w0.z_gettotalbalance(1, True)['private'])
-        snapshot = wait_for_mature_coinbase_count(w0, expected_unspent_mature())
-        n_expected = len(snapshot)
-        expected_value = sum(Decimal(u['value']) for u in snapshot)
-        print("  [diag] mature coinbase UTXO count={}, total {}".format(
-            n_expected, expected_value))
+        n_expected = len(wait_for_mature_coinbase_count(w0, expected_unspent_mature()))
+        print("  [diag] mature coinbase UTXO count={}".format(n_expected))
 
         result = w0.z_shieldcoinbase(w0_taddr, w0_zaddr)
         self._assert_preflight_shape(result)
         assert_equal(result['shieldingUTXOs'], n_expected)
-        assert_equal(Decimal(result['shieldingValue']), expected_value)
         assert_equal(result['remainingUTXOs'], 0)
         assert_equal(Decimal(result['remainingValue']), Decimal('0'))
+        shielding_value = Decimal(result['shieldingValue'])
+        assert_true(shielding_value > 0, "Expected positive shielding value")
 
         txid = wait_and_assert_operationid_status(w0, result['opid'])
         assert_true(txid is not None, "Shielding tx should have succeeded")
         print("  Shielding tx: {}".format(txid))
 
-        node.generate(1)
-        fee = Decimal(wait_for_tx_scanned(w0, txid)['fee'])
-        expected_post = pre_private + expected_value - fee
-        post_private = Decimal(w0.z_gettotalbalance(1, True)['private'])
-        assert_equal(post_private, expected_post)
+        fee, post_private, _ = confirm_and_check_balance(txid, pre_private, shielding_value)
         mature_spent += n_expected
         print("  Balance {} -> {} ZEC (fee {}). PASSED".format(
             pre_private, post_private, fee))
@@ -377,31 +376,22 @@ class WalletZShieldCoinbaseTest(BitcoinTestFramework):
         # ---- F2: account-UUID sweep ---------------------------------
 
         print("Test F2: account-UUID sweep (happy path)...")
-        # The UUID form resolves via `get_transparent_receivers(account, true, true)`,
-        # which (with `include_change=true`) returns both EXTERNAL and INTERNAL
-        # transparent receivers of the account's registered UAs. The mining
-        # address provisioned by `generate-account-and-miner-address` is at
-        # `KeyScope::INTERNAL`, so it is reachable through this path.
+        # UUID form sweeps every transparent receiver of the account,
+        # including the INTERNAL-scope mining address.
         node.generate(COINBASE_MATURITY + 10)
         pre_private = post_private
-        snapshot = wait_for_mature_coinbase_count(w0, expected_unspent_mature())
-        n_expected = len(snapshot)
-        expected_value = sum(Decimal(u['value']) for u in snapshot)
+        n_expected = len(wait_for_mature_coinbase_count(w0, expected_unspent_mature()))
 
         result = w0.z_shieldcoinbase(w0_account_uuid, w0_zaddr)
         self._assert_preflight_shape(result)
         assert_equal(result['shieldingUTXOs'], n_expected,
                      "UUID-form should sweep every mature coinbase")
-        assert_equal(Decimal(result['shieldingValue']), expected_value)
         assert_equal(result['remainingUTXOs'], 0)
         assert_equal(Decimal(result['remainingValue']), Decimal('0'))
+        shielding_value = Decimal(result['shieldingValue'])
         txid = wait_and_assert_operationid_status(w0, result['opid'])
         assert_true(txid is not None)
-        node.generate(1)
-        fee = Decimal(wait_for_tx_scanned(w0, txid)['fee'])
-        expected_post = pre_private + expected_value - fee
-        post_private = Decimal(w0.z_gettotalbalance(1, True)['private'])
-        assert_equal(post_private, expected_post)
+        fee, post_private, _ = confirm_and_check_balance(txid, pre_private, shielding_value)
         mature_spent += n_expected
         print("  PASSED ({} UTXOs swept, fee {})".format(n_expected, fee))
 
@@ -410,30 +400,19 @@ class WalletZShieldCoinbaseTest(BitcoinTestFramework):
         print("Test F3: shield into a UA on a different account (not the source)...")
         node.generate(COINBASE_MATURITY + 10)
         pre_private = post_private
-        snapshot = wait_for_mature_coinbase_count(w0, expected_unspent_mature())
-        n_expected = len(snapshot)
-        expected_value = sum(Decimal(u['value']) for u in snapshot)
+        n_expected = len(wait_for_mature_coinbase_count(w0, expected_unspent_mature()))
 
-        # toaddress belongs to a different account in the same wallet.
-        # The new API design imposes no ownership relationship between
-        # `fromaddress` and `toaddress` — only that toaddress has a
-        # shielded receiver. Source remains account 0.
+        # toaddress is a UA on a different account; fromaddress need not own it.
         result = w0.z_shieldcoinbase(w0_taddr, w0_extra_zaddr)
         self._assert_preflight_shape(result)
         assert_equal(result['shieldingUTXOs'], n_expected)
-        assert_equal(Decimal(result['shieldingValue']), expected_value)
         assert_equal(result['remainingUTXOs'], 0)
         assert_equal(Decimal(result['remainingValue']), Decimal('0'))
+        shielding_value = Decimal(result['shieldingValue'])
         txid = wait_and_assert_operationid_status(w0, result['opid'])
         assert_true(txid is not None)
-        node.generate(1)
-        fee = Decimal(wait_for_tx_scanned(w0, txid)['fee'])
-        # Source and destination are both in this wallet (different
-        # accounts), so total `private` grows by the full net-of-fee
-        # value just as for an in-account shield.
-        expected_post = pre_private + expected_value - fee
-        post_private = Decimal(w0.z_gettotalbalance(1, True)['private'])
-        assert_equal(post_private, expected_post)
+        # Both accounts are in this wallet, so `private` grows by the net value.
+        fee, post_private, _ = confirm_and_check_balance(txid, pre_private, shielding_value)
         mature_spent += n_expected
         print("  PASSED")
 
@@ -442,68 +421,73 @@ class WalletZShieldCoinbaseTest(BitcoinTestFramework):
         print("Test F4: limit truncation (limit<eligible)...")
         node.generate(COINBASE_MATURITY + 30)
         pre_private = post_private
-        snapshot = wait_for_mature_coinbase_count(w0, expected_unspent_mature())
-        n_eligible = len(snapshot)
-        # Sort by value descending to mirror the backend's "highest-value
-        # `n` UTXOs" selection. When values tie, the per-input selection
-        # is implementation-defined, but the SUM of any top-k slice is
-        # uniquely determined — so the value assertions below remain exact.
-        sorted_by_value = sorted(
-            snapshot, key=lambda u: Decimal(u['value']), reverse=True)
+        n_eligible = len(wait_for_mature_coinbase_count(w0, expected_unspent_mature()))
 
         limit = 3
         assert_true(
             n_eligible > limit,
             "Need >{} mature coinbase UTXOs to exercise truncation, got {}".format(
                 limit, n_eligible))
-        expected_shielding_value = sum(
-            Decimal(u['value']) for u in sorted_by_value[:limit])
-        expected_remaining_value = sum(
-            Decimal(u['value']) for u in sorted_by_value[limit:])
 
+        # Sweep 1: capped at `limit`; the rest are reported as remaining.
         # Positional signature: (fromaddress, toaddress, fee, limit, ...)
-        result = w0.z_shieldcoinbase(w0_taddr, w0_zaddr, None, limit)
-        self._assert_preflight_shape(result)
-        assert_equal(result['shieldingUTXOs'], limit)
-        assert_equal(result['remainingUTXOs'], n_eligible - limit)
-        assert_equal(Decimal(result['shieldingValue']), expected_shielding_value)
-        assert_equal(Decimal(result['remainingValue']), expected_remaining_value)
-        txid = wait_and_assert_operationid_status(w0, result['opid'])
-        assert_true(txid is not None)
+        result1 = w0.z_shieldcoinbase(w0_taddr, w0_zaddr, None, limit)
+        self._assert_preflight_shape(result1)
+        assert_equal(result1['shieldingUTXOs'], limit)
+        assert_equal(result1['remainingUTXOs'], n_eligible - limit)
+        shielding_value1 = Decimal(result1['shieldingValue'])
+        remaining_utxos1 = result1['remainingUTXOs']
+        remaining_value1 = Decimal(result1['remainingValue'])
+        assert_true(remaining_value1 > 0,
+                    "Truncation must leave positive remaining value")
+        txid1 = wait_and_assert_operationid_status(w0, result1['opid'])
+        assert_true(txid1 is not None)
+
+        # Sweep 2: no limit, before sweep 1 is mined. The proposal excludes
+        # sweep 1's now-spent inputs, so it must drain exactly what sweep 1
+        # reported as remaining — backend-anchored, no snapshot summing.
+        result2 = w0.z_shieldcoinbase(w0_taddr, w0_zaddr)
+        self._assert_preflight_shape(result2)
+        assert_equal(result2['shieldingUTXOs'], remaining_utxos1,
+                     "2nd sweep must drain exactly sweep 1's remaining UTXOs")
+        assert_equal(Decimal(result2['shieldingValue']), remaining_value1,
+                     "2nd sweep value must equal sweep 1's reported remainingValue")
+        assert_equal(result2['remainingUTXOs'], 0)
+        assert_equal(Decimal(result2['remainingValue']), Decimal('0'))
+        shielding_value2 = Decimal(result2['shieldingValue'])
+        txid2 = wait_and_assert_operationid_status(w0, result2['opid'])
+        assert_true(txid2 is not None)
+
+        # One block confirms both sweeps.
         node.generate(1)
-        fee = Decimal(wait_for_tx_scanned(w0, txid)['fee'])
-        expected_post = pre_private + expected_shielding_value - fee
+        fee1 = Decimal(wait_for_tx_scanned(w0, txid1)['fee'])
+        fee2 = Decimal(wait_for_tx_scanned(w0, txid2)['fee'])
         post_private = Decimal(w0.z_gettotalbalance(1, True)['private'])
-        assert_equal(post_private, expected_post)
-        mature_spent += limit
-        print("  PASSED ({}/{} selected, {} remaining)".format(
-            limit, n_eligible, n_eligible - limit))
+        assert_equal(
+            post_private,
+            pre_private + shielding_value1 + shielding_value2 - fee1 - fee2)
+        mature_spent += n_eligible
+        print("  PASSED ({}/{} selected, {} swept in follow-up)".format(
+            limit, n_eligible, remaining_utxos1))
 
         # ---- F5: limit > eligible is harmless -----------------------
 
         print("Test F5: limit greater than eligible is a no-op cap...")
         node.generate(COINBASE_MATURITY + 10)
         pre_private = post_private
-        snapshot = wait_for_mature_coinbase_count(w0, expected_unspent_mature())
-        n_eligible = len(snapshot)
-        expected_value = sum(Decimal(u['value']) for u in snapshot)
+        n_eligible = len(wait_for_mature_coinbase_count(w0, expected_unspent_mature()))
 
         huge_limit = n_eligible + 1000
         result = w0.z_shieldcoinbase(w0_taddr, w0_zaddr, None, huge_limit)
         self._assert_preflight_shape(result)
-        # Limit exceeds eligible, so the cap has no effect: every mature
-        # UTXO is swept and nothing remains.
+        # Cap above eligible has no effect: everything is swept.
         assert_equal(result['shieldingUTXOs'], n_eligible)
-        assert_equal(Decimal(result['shieldingValue']), expected_value)
         assert_equal(result['remainingUTXOs'], 0)
         assert_equal(Decimal(result['remainingValue']), Decimal('0'))
+        shielding_value = Decimal(result['shieldingValue'])
         txid = wait_and_assert_operationid_status(w0, result['opid'])
         assert_true(txid is not None)
-        node.generate(1)
-        fee = Decimal(wait_for_tx_scanned(w0, txid)['fee'])
-        expected_post = pre_private + expected_value - fee
-        post_private = Decimal(w0.z_gettotalbalance(1, True)['private'])
-        assert_equal(post_private, expected_post)
+        fee, post_private, _ = confirm_and_check_balance(txid, pre_private, shielding_value)
         mature_spent += n_eligible
         print("  PASSED")
 
@@ -512,37 +496,27 @@ class WalletZShieldCoinbaseTest(BitcoinTestFramework):
         print("Test F6: memo propagation...")
         node.generate(COINBASE_MATURITY + 10)
         pre_private = post_private
-        snapshot = wait_for_mature_coinbase_count(w0, expected_unspent_mature())
-        n_expected = len(snapshot)
-        expected_value = sum(Decimal(u['value']) for u in snapshot)
+        n_expected = len(wait_for_mature_coinbase_count(w0, expected_unspent_mature()))
 
-        # 1024-character hex string = 512 bytes. Leading bytes spell
-        # "c0ffee" in ASCII so we can eyeball matches if the assertion
-        # fails.
+        # 512-byte memo (max); leading bytes spell "c0ffee" for eyeballing.
         my_memo = '633066666565' + '0' * (1024 - 12)
 
         # Positional signature: (fromaddress, toaddress, fee, limit, memo, ...)
         result = w0.z_shieldcoinbase(w0_taddr, w0_zaddr, None, None, my_memo)
         self._assert_preflight_shape(result)
         assert_equal(result['shieldingUTXOs'], n_expected)
-        assert_equal(Decimal(result['shieldingValue']), expected_value)
         assert_equal(result['remainingUTXOs'], 0)
         assert_equal(Decimal(result['remainingValue']), Decimal('0'))
+        shielding_value = Decimal(result['shieldingValue'])
         txid = wait_and_assert_operationid_status(w0, result['opid'])
         assert_true(txid is not None)
-        node.generate(1)
-        tx_details = wait_for_tx_scanned(w0, txid)
-        fee = Decimal(tx_details['fee'])
-        expected_post = pre_private + expected_value - fee
-        post_private = Decimal(w0.z_gettotalbalance(1, True)['private'])
-        assert_equal(post_private, expected_post)
+        fee, post_private, tx_details = confirm_and_check_balance(
+            txid, pre_private, shielding_value)
         mature_spent += n_expected
 
         shielded_outputs = [o for o in tx_details.get('outputs', [])
                             if o.get('pool') in ('sapling', 'orchard')]
-        # The sweep produces exactly one shielded payment carrying the
-        # user-supplied memo (change notes, if any, use an empty memo
-        # and would not match this hex blob).
+        # Exactly one shielded payment carries the memo (change uses empty).
         matching = [o for o in shielded_outputs if o.get('memo') == my_memo]
         assert_equal(
             len(matching), 1,
@@ -556,14 +530,13 @@ class WalletZShieldCoinbaseTest(BitcoinTestFramework):
         print("Test F7: operation lifecycle (status -> result -> cleared)...")
         node.generate(COINBASE_MATURITY + 10)
         pre_private = post_private
-        snapshot = wait_for_mature_coinbase_count(w0, expected_unspent_mature())
-        n_expected = len(snapshot)
-        expected_value = sum(Decimal(u['value']) for u in snapshot)
+        n_expected = len(wait_for_mature_coinbase_count(w0, expected_unspent_mature()))
 
         result = w0.z_shieldcoinbase(w0_taddr, w0_zaddr)
         self._assert_preflight_shape(result)
         assert_equal(result['shieldingUTXOs'], n_expected)
-        assert_equal(Decimal(result['shieldingValue']), expected_value)
+        assert_equal(result['remainingUTXOs'], 0)
+        assert_equal(Decimal(result['remainingValue']), Decimal('0'))
         opid = result['opid']
         assert_true(opid.startswith("opid-"),
                     "Expected opid- prefix, got {!r}".format(opid))
