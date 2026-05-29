@@ -107,7 +107,10 @@ class WalletZShieldCoinbaseMultiTaddrTest(BitcoinTestFramework):
         return start_nodes(self.num_nodes, self.options.tmpdir, args)
 
     def _mature_coinbase_on(self, wallet, taddr):
-        utxos = wallet.z_listunspent(COINBASE_MATURITY + 1)
+        # minconf = COINBASE_MATURITY matches the proposal (coinbase is
+        # spendable at exactly 100 confirmations); minconf+1 would miss a
+        # boundary UTXO the sweep selects.
+        utxos = wallet.z_listunspent(COINBASE_MATURITY)
         return [u for u in utxos
                 if u.get('pool') == 'transparent' and u.get('address') == taddr]
 
@@ -208,15 +211,12 @@ class WalletZShieldCoinbaseMultiTaddrTest(BitcoinTestFramework):
         w0 = self.wallets[0]
 
         # ---- Phase 3: mine to B until exactly one B coinbase matures.
-        # Post-restart zebrad has just block 1. Mine COINBASE_MATURITY+1
-        # (101) more so:
-        #   tip = 102
-        #   block 1 (A) confirmations = 102 → mature
-        #   block 2 (B) confirmations = 101 → mature
-        #   block 3 (B) confirmations = 100 → NOT mature
-        # i.e. exactly one mature coinbase on each receiver.
-        print("Mining {} blocks at miner=B...".format(COINBASE_MATURITY + 1))
-        node.generate(COINBASE_MATURITY + 1)
+        # Post-restart zebrad has only block 1. Mining COINBASE_MATURITY more
+        # → tip 101: block 1 (A) and block 2 (B) reach maturity (101 / 100
+        # confirmations), block 3 (B) does not (99). So one mature coinbase
+        # per receiver, and the UUID sweep selects exactly those two.
+        print("Mining {} blocks at miner=B...".format(COINBASE_MATURITY))
+        node.generate(COINBASE_MATURITY)
 
         # Wait for the 1+1 state to hold for COINBASE_SETTLE_SECS (see above).
         print("Waiting for wallet to see exactly 1 mature coinbase on each receiver...")
@@ -237,7 +237,7 @@ class WalletZShieldCoinbaseMultiTaddrTest(BitcoinTestFramework):
 
         # ---- Phase 4: pre-sweep assertions (exact). ----------------
         # Expect 1 mature coinbase on each receiver: block 1 (A) at
-        # 102 confirmations, block 2 (B) at 101 confirmations.
+        # 101 confirmations, block 2 (B) at 100 confirmations.
         assert_equal(
             len(mature_a), 1,
             "Pre-sweep: expected exactly 1 mature coinbase on A (block 1), saw {}".format(
