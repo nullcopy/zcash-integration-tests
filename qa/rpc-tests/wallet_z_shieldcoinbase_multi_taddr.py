@@ -71,6 +71,13 @@ COINBASE_MATURITY = 100
 # restart; shallower blocks live in memory and are lost on shutdown.
 ZEBRA_MAX_REORG_HEIGHT = 99
 
+# Seconds the 1+1 mature-coinbase state must hold steady before a sweep.
+# z_listunspent shows new coinbase before zallet's recover_history scan
+# task (30s idle tick, not woken on tip change) makes it spendable to
+# z_shieldcoinbase, so the window must outlast that tick. See
+# wallet_z_shieldcoinbase.py; drop once #316 lands.
+COINBASE_SETTLE_SECS = 35
+
 
 def first_transparent_receiver(wallet, ua):
     receivers = wallet.z_listunifiedreceivers(ua)
@@ -211,17 +218,21 @@ class WalletZShieldCoinbaseMultiTaddrTest(BitcoinTestFramework):
         print("Mining {} blocks at miner=B...".format(COINBASE_MATURITY + 1))
         node.generate(COINBASE_MATURITY + 1)
 
-        # Wait for the wallet to scan to chain tip — readiness signal
-        # is the expected 1+1 mature coinbase state.
+        # Wait for the 1+1 state to hold for COINBASE_SETTLE_SECS (see above).
         print("Waiting for wallet to see exactly 1 mature coinbase on each receiver...")
         deadline = time.time() + 240
         mature_a = []
         mature_b = []
+        stable_secs = 0
         while time.time() < deadline:
             mature_a = self._mature_coinbase_on(w0, taddr_a)
             mature_b = self._mature_coinbase_on(w0, taddr_b)
             if len(mature_a) == 1 and len(mature_b) == 1:
-                break
+                stable_secs += 1
+                if stable_secs >= COINBASE_SETTLE_SECS:
+                    break
+            else:
+                stable_secs = 0
             time.sleep(1)
 
         # ---- Phase 4: pre-sweep assertions (exact). ----------------

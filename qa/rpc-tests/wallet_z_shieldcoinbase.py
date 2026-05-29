@@ -56,55 +56,54 @@ def mature_transparent_utxos(wallet):
     return [u for u in utxos if u.get('pool') == 'transparent']
 
 
-def wait_for_mature_coinbase_count(wallet, expected_count, timeout=240):
+# Seconds the mature-coinbase count must hold steady before a sweep.
+# z_listunspent (tip-change-driven) shows new coinbase before zallet's
+# recover_history scan task (30s idle tick, not woken on tip change) makes
+# it spendable to z_shieldcoinbase, so the window must outlast that tick.
+# Drop once recover_history wakes on tip change / a sync RPC lands (#316).
+COINBASE_SETTLE_SECS = 35
+
+
+def wait_for_mature_coinbase_count(wallet, expected_count,
+                                   timeout=300, settle_secs=COINBASE_SETTLE_SECS):
     """
-    Wait until the wallet's view of mature transparent coinbase UTXOs is
-    exactly `expected_count`, and return that snapshot.
+    Return the wallet's mature transparent coinbase UTXOs once the count has
+    held at `expected_count` for `settle_secs` consecutive seconds.
 
-    Used as a sync barrier before each sweep. With no mining in flight and
-    no in-flight tx for the wallet to ingest, the wallet's mature-coinbase
-    set converges from below to its final value as it scans toward the
-    chain tip. Pinning the exact post-sync count lets later assertions on
-    `shieldingUTXOs` / `shieldingValue` be exact rather than ranged.
-
-    Zallet's `z_listunspent` reflects only what the wallet has scanned and
-    committed to its local SQLite database; after `node.generate(N)` there
-    is a non-trivial delay (block fetch + scan + commit) before the view
-    updates, and `sync_all` does not synchronize wallets (no
-    `getwalletstatus` RPC yet: https://github.com/zcash/wallet/issues/316).
+    The steady-count requirement is the sync barrier: z_listunspent reaches a
+    new tip before the proposal builder's spendable view does, so we wait for
+    the views to converge (no getwalletstatus RPC yet, zcash/wallet#316).
     """
     deadline = time.time() + timeout
     last_count = -1
+    stable_secs = 0
     transparent = []
     while time.time() < deadline:
         try:
             transparent = mature_transparent_utxos(wallet)
-            last_count = len(transparent)
-            if last_count == expected_count:
+            count = len(transparent)
+            if count == expected_count and last_count == expected_count:
+                stable_secs += 1
+            else:
+                stable_secs = 0
+            last_count = count
+            if count == expected_count and stable_secs >= settle_secs:
                 return transparent
         except Exception:
             pass
         time.sleep(1)
 
     raise AssertionError(
-        "wait_for_mature_coinbase_count: timeout after {}s; saw {} mature "
-        "transparent UTXOs (wanted exactly {})".format(
-            timeout, last_count, expected_count))
+        "wait_for_mature_coinbase_count: timeout after {}s; last saw {} mature "
+        "transparent UTXOs (wanted exactly {} stable for {}s)".format(
+            timeout, last_count, expected_count, settle_secs))
 
 
 def wait_for_tx_scanned(wallet, txid, timeout=120):
     """
-    Wait until the wallet has scanned the block containing `txid`, then
-    return its `z_viewtransaction` view.
-
-    Acts as the single post-confirm sync barrier for a sweep. Once the
-    wallet exposes the tx via `z_viewtransaction` with a populated `fee`
-    field, the same scan has updated every other view that depends on
-    it (`z_gettotalbalance`, `z_listunspent`, ...), so they can be read
-    synchronously without a second wait.
-
-    Until `getwalletstatus` lands (zcash/wallet#316) there is no
-    synchronous wallet-sync primitive; this poll is the workaround.
+    Return `txid`'s `z_viewtransaction` view once it carries a `fee`, i.e. the
+    confirming block is scanned. Other scan-dependent views (balance,
+    z_listunspent) are then current too, so they can be read without a wait.
     """
     deadline = time.time() + timeout
     last_err = None
