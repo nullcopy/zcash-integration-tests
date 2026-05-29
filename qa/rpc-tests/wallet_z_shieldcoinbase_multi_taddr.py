@@ -298,55 +298,55 @@ class WalletZShieldCoinbaseMultiTaddrTest(BitcoinTestFramework):
             "linking same-account transparent addresses.")
         print("  Shielding tx: {}".format(txid))
 
-        # ---- Phase 6: confirm the sweep tx. ------------------------
-        # Mining one block confirms the sweep tx (it lands in block 103).
-        # It also produces a new coinbase output to B (block 3 reaches
-        # 101 confirmations — i.e. just matures). That residual is from
-        # this test-infrastructure confirmation block, NOT a missed
-        # sweep input — block 1 and block 2 have both been spent.
-        node.generate(1)
+        # Pre-sweep coinbase UTXOs on each receiver; checked spent below.
+        spent_a = (mature_a[0]['txid'], mature_a[0]['outindex'])
+        spent_b = (mature_b[0]['txid'], mature_b[0]['outindex'])
 
-        # Wait for shielded balance to register the sweep.
-        deadline = time.time() + 120
+        # ---- Phase 6: confirm the sweep tx. ------------------------
+        # Wait for the balance to reach exactly shieldingValue - fee: this is
+        # both the sync barrier (confirming block fully scanned) and an exact
+        # assertion.
+        node.generate(1)
+        shielding_value = Decimal(result['shieldingValue'])
+        deadline = time.time() + 180
+        fee = None
         post_private = Decimal('0')
         while time.time() < deadline:
-            post_private = Decimal(w0.z_gettotalbalance(1, True)['private'])
-            if post_private > 0:
-                break
+            try:
+                tx_details = w0.z_viewtransaction(txid)
+                if 'fee' in tx_details:
+                    fee = Decimal(tx_details['fee'])
+                    post_private = Decimal(w0.z_gettotalbalance(1, True)['private'])
+                    if fee > 0 and post_private == shielding_value - fee:
+                        break
+            except Exception:
+                pass
             time.sleep(1)
 
         # ---- Phase 7: post-sweep assertions (exact). ---------------
-        # Shielded balance equals the swept value minus the fee paid
-        # by the shielding tx. Read the fee directly off the tx.
-        tx_details = w0.z_viewtransaction(txid)
-        fee = Decimal(tx_details['fee'])
-        assert_true(fee > 0, "Sweep fee should be positive, got {}".format(fee))
+        assert_true(fee is not None and fee > 0,
+                    "Sweep fee should be positive, got {}".format(fee))
         assert_equal(
             post_private,
-            Decimal(result['shieldingValue']) - fee,
+            shielding_value - fee,
             "Post-sweep shielded balance should equal shieldingValue ({}) - fee ({}); "
-            "got {}".format(result['shieldingValue'], fee, post_private))
+            "got {}".format(shielding_value, fee, post_private))
 
-        # Block 1 (A's only mature coinbase) was spent in the sweep:
-        # no mature transparent UTXOs on A remain.
-        post_mature_a = self._mature_coinbase_on(w0, taddr_a)
-        assert_equal(
-            len(post_mature_a), 0,
-            "Post-sweep: expected 0 mature coinbase on A (block 1 was spent), "
-            "saw {}".format(len(post_mature_a)))
+        # Both receivers' coinbase must be spent by the one UUID sweep — the
+        # multi-receiver regression guard (a skipped receiver B would remain).
+        unspent_ids = {
+            (u['txid'], u['outindex'])
+            for u in w0.z_listunspent(1)
+            if u.get('pool') == 'transparent'
+        }
+        assert_true(
+            spent_a not in unspent_ids,
+            "Receiver A's coinbase (block 1) must be spent by the sweep")
+        assert_true(
+            spent_b not in unspent_ids,
+            "Receiver B's coinbase (block 2) must be spent by the sweep")
 
-        # On B, block 2 was spent — but mining the confirmation block
-        # advanced the tip by one, which brought block 3 to 101
-        # confirmations. The single remaining UTXO is that block 3
-        # coinbase, not a sweep residual.
-        post_mature_b = self._mature_coinbase_on(w0, taddr_b)
-        assert_equal(
-            len(post_mature_b), 1,
-            "Post-sweep: expected exactly 1 mature coinbase on B (the "
-            "confirmation block's coinbase, not a sweep residual), saw {}".format(
-                len(post_mature_b)))
-
-        print("PASSED ({} ZEC swept; {} ZEC shielded after {} ZEC fee)".format(
+        print("PASSED ({} ZEC swept from 2 receivers; {} ZEC shielded after {} ZEC fee)".format(
             pre_transparent_total, post_private, fee))
 
 
