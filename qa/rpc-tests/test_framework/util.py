@@ -696,10 +696,27 @@ def set_node_times(nodes, t):
     for node in nodes:
         node.setmocktime(t)
 
+# Maximum seconds to wait for a child process to exit after it has been asked
+# to stop, before we force-kill it. This bounds the cleanup waits below so they
+# can never deadlock the test: if a process was started but never sent a stop
+# -- e.g. the zebrad/zallet left running when cache setup aborts midway, as
+# happens when a zallet fails to sync with "Missing Orchard tree state" -- a
+# bare .wait() would otherwise hang until the CI job's multi-hour hard limit.
+# This is shutdown grace time, not test runtime: it only starts after stop_*().
+PROC_WAIT_TIMEOUT = 60
+
+def wait_or_kill(proc):
+    '''Wait for proc to exit, force-killing it if it overruns PROC_WAIT_TIMEOUT.'''
+    try:
+        proc.wait(timeout=PROC_WAIT_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+
 def wait_bitcoinds():
     # Wait for all bitcoinds to cleanly exit
     for bitcoind in list(bitcoind_processes.values()):
-        bitcoind.wait()
+        wait_or_kill(bitcoind)
     bitcoind_processes.clear()
 
 def connect_nodes(from_connection, node_num):
@@ -1054,7 +1071,7 @@ def stop_wallets(wallets):
 def wait_zallets():
     # Wait for all zallets to cleanly exit
     for zallet in list(zallet_processes.values()):
-        zallet.wait()
+        wait_or_kill(zallet)
     zallet_processes.clear()
 
 def wait_for_wallet_start(process, url, i):
@@ -1182,11 +1199,7 @@ def wait_zainods():
         # TODO: Add a `stop` RPC method to zainod
         try:
             zainod.terminate()
-            zainod.wait()
         except Exception:
-            try:
-                zainod.kill()
-            except Exception:
-                pass
-        continue
+            pass
+        wait_or_kill(zainod)
     zainod_processes.clear()
