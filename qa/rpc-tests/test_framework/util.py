@@ -54,7 +54,7 @@ PORT_MIN = 11000
 # The number of ports to "reserve" for p2p, rpc and wallet rpc each
 PORT_RANGE = 5000
 
-def zcashd_binary():
+def zebrad_binary():
     return os.getenv("ZEBRAD", os.path.join("src", "zebrad"))
 
 def zaino_binary():
@@ -261,7 +261,7 @@ def rpc_zaino_url(i, rpchost=None):
 # fails fast and surfaces the cause. Override with the PROC_START_TIMEOUT env var.
 PROC_START_TIMEOUT = int(os.getenv("PROC_START_TIMEOUT", "120"))
 
-def wait_for_bitcoind_start(process, url, i):
+def wait_for_zebrad_start(process, url, i):
     '''
     Wait for bitcoind to start. This means that RPC is accessible and fully initialized.
     Raise an exception if bitcoind exits during initialization, or fails to become
@@ -270,9 +270,9 @@ def wait_for_bitcoind_start(process, url, i):
     deadline = time.time() + PROC_START_TIMEOUT
     while True:
         if process.poll() is not None:
-            raise Exception('%s node %d exited with status %i during initialization' % (zcashd_binary(), i, process.returncode))
+            raise Exception('%s node %d exited with status %i during initialization' % (zebrad_binary(), i, process.returncode))
         if time.time() > deadline:
-            raise Exception('%s node %d failed to become ready within %d seconds' % (zcashd_binary(), i, PROC_START_TIMEOUT))
+            raise Exception('%s node %d failed to become ready within %d seconds' % (zebrad_binary(), i, PROC_START_TIMEOUT))
         try:
             rpc = get_rpc_proxy(url, i)
             rpc.getblockcount()
@@ -352,12 +352,12 @@ def initialize_chain(test_dir, num_nodes, cachedir, cache_behavior='current'):
             config = update_zebrad_conf(datadir, rpc_port(i), p2p_port(i), indexer_rpc_port(i), ZebraArgs(
                 miner_address=miner_addresses[i],
             ))
-            args = [ zcashd_binary(), "-c="+config, "start" ]
+            args = [ zebrad_binary(), "-c="+config, "start" ]
 
             bitcoind_processes[i] = subprocess.Popen(args)
             if os.getenv("PYTHON_DEBUG", ""):
-                print("initialize_chain: %s started, waiting for RPC to come up" % (zcashd_binary(),))
-            wait_for_bitcoind_start(bitcoind_processes[i], rpc_url(i), i)
+                print("initialize_chain: %s started, waiting for RPC to come up" % (zebrad_binary(),))
+            wait_for_zebrad_start(bitcoind_processes[i], rpc_url(i), i)
             if os.getenv("PYTHON_DEBUG", ""):
                 print("initialize_chain: RPC successfully started")
 
@@ -400,11 +400,11 @@ def initialize_chain(test_dir, num_nodes, cachedir, cache_behavior='current'):
                 wait_bitcoinds()
                 for i in range(MAX_NODES):
                     config = zebrad_config(node_dir(cachedir, i))
-                    args = [ zcashd_binary(), "-c="+config, "start" ]
+                    args = [ zebrad_binary(), "-c="+config, "start" ]
                     bitcoind_processes[i] = subprocess.Popen(args)
                     if os.getenv("PYTHON_DEBUG", ""):
-                        print("initialize_chain: %s started, waiting for RPC to come up" % (zcashd_binary(),))
-                    wait_for_bitcoind_start(bitcoind_processes[i], rpc_url(i), i)
+                        print("initialize_chain: %s started, waiting for RPC to come up" % (zebrad_binary(),))
+                    wait_for_zebrad_start(bitcoind_processes[i], rpc_url(i), i)
                     if os.getenv("PYTHON_DEBUG", ""):
                         print("initialize_chain: RPC successfully started")
                 for i in range(MAX_NODES):
@@ -623,7 +623,7 @@ def start_node(i, dirname, extra_args=None, rpchost=None, timewait=None, binary=
     """
     datadir = node_dir(dirname, i)
     if binary is None:
-        binary = zcashd_binary()
+        binary = zebrad_binary()
     config = update_zebrad_conf(datadir, rpc_port(i), p2p_port(i), indexer_rpc_port(i), extra_args)
     args = [ binary, "-c="+config, "start" ]
 
@@ -631,7 +631,7 @@ def start_node(i, dirname, extra_args=None, rpchost=None, timewait=None, binary=
     if os.getenv("PYTHON_DEBUG", ""):
         print("start_node: bitcoind started, waiting for RPC to come up")
     url = rpc_url(i, rpchost)
-    wait_for_bitcoind_start(bitcoind_processes[i], url, i)
+    wait_for_zebrad_start(bitcoind_processes[i], url, i)
     if os.getenv("PYTHON_DEBUG", ""):
         print("start_node: RPC successfully started for node {} with pid {}".format(i, bitcoind_processes[i].pid))
     proxy = get_rpc_proxy(url, i, timeout=timewait)
@@ -647,7 +647,7 @@ def assert_start_raises_init_error(i, dirname, extra_args=None, expected_msg=Non
             node = start_node(i, dirname, extra_args, stderr=log_stderr)
             stop_node(node, i)
         except Exception as e:
-            assert ("%s node %d exited" % (zcashd_binary(), i)) in str(e) # node must have shutdown
+            assert ("%s node %d exited" % (zebrad_binary(), i)) in str(e) # node must have shutdown
             if expected_msg is not None:
                 log_stderr.seek(0)
                 stderr = log_stderr.read().decode('utf-8')
@@ -655,9 +655,9 @@ def assert_start_raises_init_error(i, dirname, extra_args=None, expected_msg=Non
                     raise AssertionError("Expected error \"" + expected_msg + "\" not found in:\n" + stderr)
         else:
             if expected_msg is None:
-                assert_msg = "%s should have exited with an error" % (zcashd_binary(),)
+                assert_msg = "%s should have exited with an error" % (zebrad_binary(),)
             else:
-                assert_msg = "%s should have exited with expected error %r" % (zcashd_binary(), expected_msg)
+                assert_msg = "%s should have exited with expected error %r" % (zebrad_binary(), expected_msg)
             raise AssertionError(assert_msg)
 
 def start_nodes(num_nodes, dirname, extra_args=None, rpchost=None, binary=None):

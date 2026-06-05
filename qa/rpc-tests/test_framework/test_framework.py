@@ -18,7 +18,7 @@ import traceback
 from .config import ZebraArgs
 from .proxy import JSONRPCException
 from .util import (
-    zcashd_binary,
+    zebrad_binary,
     initialize_chain,
     prepare_wallets_for_mining,
     start_nodes,
@@ -260,10 +260,10 @@ class ComparisonTestFramework(BitcoinTestFramework):
 
     def add_options(self, parser):
         parser.add_option("--testbinary", dest="testbinary",
-                          default=zcashd_binary(),
+                          default=zebrad_binary(),
                           help="zebrad binary to test")
         parser.add_option("--refbinary", dest="refbinary",
-                          default=zcashd_binary(),
+                          default=zebrad_binary(),
                           help="zebrad binary to use for reference nodes (if any)")
 
     def setup_network(self):
