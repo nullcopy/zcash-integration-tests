@@ -253,14 +253,26 @@ def rpc_zaino_url(i, rpchost=None):
     #
     return "http://%s:%d" % (host, int(port))
 
+# Maximum seconds to wait for a spawned process (zebrad/zallet/zainod) to become
+# ready (its RPC responding) before giving up. Without a bound, a process that
+# starts but never finishes init -- e.g. a stuck sync, or a port still held by an
+# orphaned process from a prior aborted run -- would spin in the loops below
+# forever, hanging the run until CI's multi-hour hard limit. Raising instead
+# fails fast and surfaces the cause. Override with the PROC_START_TIMEOUT env var.
+PROC_START_TIMEOUT = int(os.getenv("PROC_START_TIMEOUT", "120"))
+
 def wait_for_bitcoind_start(process, url, i):
     '''
     Wait for bitcoind to start. This means that RPC is accessible and fully initialized.
-    Raise an exception if bitcoind exits during initialization.
+    Raise an exception if bitcoind exits during initialization, or fails to become
+    ready within PROC_START_TIMEOUT seconds.
     '''
+    deadline = time.time() + PROC_START_TIMEOUT
     while True:
         if process.poll() is not None:
             raise Exception('%s node %d exited with status %i during initialization' % (zcashd_binary(), i, process.returncode))
+        if time.time() > deadline:
+            raise Exception('%s node %d failed to become ready within %d seconds' % (zcashd_binary(), i, PROC_START_TIMEOUT))
         try:
             rpc = get_rpc_proxy(url, i)
             rpc.getblockcount()
@@ -696,10 +708,27 @@ def set_node_times(nodes, t):
     for node in nodes:
         node.setmocktime(t)
 
+# Maximum seconds to wait for a child process to exit after it has been asked
+# to stop, before we force-kill it. This bounds the cleanup waits below so they
+# can never deadlock the test: if a process was started but never sent a stop
+# -- e.g. the zebrad/zallet left running when cache setup aborts midway, as
+# happens when a zallet fails to sync with "Missing Orchard tree state" -- a
+# bare .wait() would otherwise hang until the CI job's multi-hour hard limit.
+# This is shutdown grace time, not test runtime: it only starts after stop_*().
+PROC_WAIT_TIMEOUT = 60
+
+def wait_or_kill(proc):
+    '''Wait for proc to exit, force-killing it if it overruns PROC_WAIT_TIMEOUT.'''
+    try:
+        proc.wait(timeout=PROC_WAIT_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+
 def wait_bitcoinds():
     # Wait for all bitcoinds to cleanly exit
     for bitcoind in list(bitcoind_processes.values()):
-        bitcoind.wait()
+        wait_or_kill(bitcoind)
     bitcoind_processes.clear()
 
 def connect_nodes(from_connection, node_num):
@@ -1054,17 +1083,21 @@ def stop_wallets(wallets):
 def wait_zallets():
     # Wait for all zallets to cleanly exit
     for zallet in list(zallet_processes.values()):
-        zallet.wait()
+        wait_or_kill(zallet)
     zallet_processes.clear()
 
 def wait_for_wallet_start(process, url, i):
     '''
     Wait for the wallet to start. This means that RPC is accessible and fully initialized.
-    Raise an exception if zallet exits during initialization.
+    Raise an exception if zallet exits during initialization, or fails to become
+    ready within PROC_START_TIMEOUT seconds.
     '''
+    deadline = time.time() + PROC_START_TIMEOUT
     while True:
         if process.poll() is not None:
             raise Exception('%s wallet %d exited with status %i during initialization' % (zallet_binary(), i, process.returncode))
+        if time.time() > deadline:
+            raise Exception('%s wallet %d failed to become ready within %d seconds' % (zallet_binary(), i, PROC_START_TIMEOUT))
         try:
             rpc = get_rpc_auth_proxy(url, i)
             rpc.getwalletinfo()
@@ -1135,11 +1168,15 @@ def start_zaino(i, dirname, extra_args=None, rpchost=None, timewait=None, binary
 def wait_for_zainod_start(process, url, i):
     '''
     Wait for zainod to start. This means that RPC is accessible and fully initialized.
-    Raise an exception if zainod exits during initialization.
+    Raise an exception if zainod exits during initialization, or fails to become
+    ready within PROC_START_TIMEOUT seconds.
     '''
+    deadline = time.time() + PROC_START_TIMEOUT
     while True:
         if process.poll() is not None:
             raise Exception('%s node %d exited with status %i during initialization' % (zaino_binary(), i, process.returncode))
+        if time.time() > deadline:
+            raise Exception('%s node %d failed to become ready within %d seconds' % (zaino_binary(), i, PROC_START_TIMEOUT))
         try:
             rpc = get_rpc_proxy(url, i)
             rpc.getblockcount()
@@ -1182,11 +1219,7 @@ def wait_zainods():
         # TODO: Add a `stop` RPC method to zainod
         try:
             zainod.terminate()
-            zainod.wait()
         except Exception:
-            try:
-                zainod.kill()
-            except Exception:
-                pass
-        continue
+            pass
+        wait_or_kill(zainod)
     zainod_processes.clear()
