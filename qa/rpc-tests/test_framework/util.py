@@ -183,17 +183,17 @@ def sync_blocks(nodes, wallets=None, wait=0.125, timeout=60, allow_different_tip
 
     if not not wallets:
         # Now that the block counts are in sync, wait for the internal
-        # notifications to finish
+        # notifications to finish. `getwalletstatus` omits `wallet_tip` until
+        # the wallet has a committed tip, so treat its absence as "not synced
+        # yet" and keep polling instead of raising KeyError.
         while timeout > 0:
             wallet_status = [ x.getwalletstatus() for x in wallets ]
-            if allow_different_tips:
-                wallet_node_tips = [ x['node_tip']['height'] for x in wallet_status ]
-                wallet_tips = [ x['wallet_tip']['height'] for x in wallet_status ]
-            else:
-                wallet_node_tips = [ x['node_tip']['blockhash'] for x in wallet_status ]
-                wallet_tips = [ x['wallet_tip']['blockhash'] for x in wallet_status ]
-            if tips == wallet_node_tips and tips == wallet_tips:
-                return True
+            if all('wallet_tip' in w for w in wallet_status):
+                key = 'height' if allow_different_tips else 'blockhash'
+                wallet_node_tips = [ w['node_tip'][key] for w in wallet_status ]
+                wallet_tips = [ w['wallet_tip'][key] for w in wallet_status ]
+                if tips == wallet_node_tips and tips == wallet_tips:
+                    return True
             time.sleep(wait)
             timeout -= wait
 
@@ -221,16 +221,19 @@ def sync_mempools(nodes, wallets=None, wait=0.5, timeout=60):
 
     if not not wallets:
         # Now that the mempools are in sync, wait for the internal
-        # notifications to finish
+        # notifications to finish. `getwalletstatus` omits `wallet_tip` until
+        # the wallet has a committed tip, so treat its absence as "not synced
+        # yet" and keep polling instead of raising KeyError.
         while timeout > 0:
-            tips = [ x.getwalletstatus() for x in wallets ]
-            tips = [ (x['node_tip']['blockhash'], x['wallet_tip']['blockhash']) for x in tips ]
-            if tips == [ tips[0] ]*len(tips) and tips[0][0] == tips[0][1]:
-                return True
+            wallet_status = [ x.getwalletstatus() for x in wallets ]
+            if all('wallet_tip' in w for w in wallet_status):
+                tips = [ (w['node_tip']['blockhash'], w['wallet_tip']['blockhash']) for w in wallet_status ]
+                if tips == [ tips[0] ]*len(tips) and tips[0][0] == tips[0][1]:
+                    return True
             time.sleep(wait)
             timeout -= wait
 
-    print('Wallet view of tips:', tips)
+    print('Wallet view of tips:', wallet_status)
     raise AssertionError("Mempool sync failed")
 
 bitcoind_processes = {}
@@ -474,12 +477,14 @@ def initialize_chain(test_dir, num_nodes, cachedir, cache_behavior='current'):
                 sys.stderr.write("Error connecting to "+rpc_url_wallet(i)+"\n")
                 sys.exit(1)
 
-        # Wait for zallets to synchronize with the nodes
+        # Wait for zallets to synchronize with the nodes. `getwalletstatus`
+        # omits `wallet_tip` until the wallet has a committed tip.
         while True:
-            tips = [ x.getwalletstatus() for x in wallets ]
-            tips = [ (x['node_tip']['blockhash'], x['wallet_tip']['blockhash']) for x in tips ]
-            if tips == [ tips[0] ]*len(tips) and tips[0][0] == tips[0][1]:
-                break
+            wallet_status = [ x.getwalletstatus() for x in wallets ]
+            if all('wallet_tip' in w for w in wallet_status):
+                tips = [ (w['node_tip']['blockhash'], w['wallet_tip']['blockhash']) for w in wallet_status ]
+                if tips == [ tips[0] ]*len(tips) and tips[0][0] == tips[0][1]:
+                    break
             time.sleep(0.25)
 
         # Shut them down, and clean up cache directories:
