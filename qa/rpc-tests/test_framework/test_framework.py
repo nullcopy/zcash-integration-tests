@@ -220,16 +220,19 @@ class BitcoinTestFramework(object):
 
         if not self.options.noshutdown:
             print("Stopping wallets")
-            stop_wallets(self.wallets)
-            wait_zallets()
+            if self.wallets is not None:
+                stop_wallets(self.wallets)
+                wait_zallets()
 
             print("Stopping indexers")
-            stop_zainos(self.zainos)
-            wait_zainods()
+            if self.zainos is not None:
+                stop_zainos(self.zainos)
+                wait_zainods()
 
             print("Stopping nodes")
-            stop_nodes(self.nodes)
-            wait_bitcoinds()
+            if self.nodes is not None:
+                stop_nodes(self.nodes)
+                wait_bitcoinds()
 
             # self.nodes, self.wallets and self.zainos migth not contain all
             # running processes, `util` keeps global dicts or running processes
