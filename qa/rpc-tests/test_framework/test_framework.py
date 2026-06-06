@@ -27,6 +27,7 @@ from .util import (
     connect_nodes_bi,
     sync_blocks,
     sync_mempools,
+    stop_all_processes,
     stop_nodes,
     stop_wallets,
     stop_zainos,
@@ -229,6 +230,10 @@ class BitcoinTestFramework(object):
             print("Stopping nodes")
             stop_nodes(self.nodes)
             wait_bitcoinds()
+
+            # self.nodes, self.wallets and self.zainos migth not contain all
+            # running processes, `util` keeps global dicts or running processes
+            stop_all_processes()
         else:
             print("Note: zebrads, zainods, and zallets were not stopped and may still be running")
 
