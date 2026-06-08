@@ -1223,3 +1223,18 @@ def wait_zainods():
             pass
         wait_or_kill(zainod)
     zainod_processes.clear()
+
+def stop_all_processes():
+    '''
+    Forcibly terminate every zebrad, zainod and zallet process we spawned,
+    regardless of whether a test data structure still references it.
+    '''
+    for processes in (bitcoind_processes, zallet_processes, zainod_processes):
+        for p in list(processes.values()):
+            try:
+                p.terminate() # send SIGHIGH
+            except Exception:
+                pass
+        for p in list(processes.values()):
+            wait_or_kill(p)
+        processes.clear()
