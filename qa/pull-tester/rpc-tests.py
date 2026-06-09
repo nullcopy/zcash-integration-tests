@@ -116,7 +116,6 @@ BASE_SCRIPTS= [
     'spentindex.py',
     'timestampindex.py',
     'blockchain.py',
-    'disablewallet.py',
     'keypool.py',
     'getblocktemplate.py',
     'bip65-cltv-p2p.py',
