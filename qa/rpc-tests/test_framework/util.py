@@ -31,7 +31,13 @@ from . import coverage
 from .proxy import ServiceProxy, JSONRPCException
 from .authproxy import AuthServiceProxy
 
-from test_framework.config import ZainoConfig, ZebraConfig, ZebraArgs
+from test_framework.config import (
+    ZainoConfig,
+    ZebraConfig,
+    ZebraArgs,
+    ZalletArgs,
+    render_regtest_nuparams,
+)
 
 COVERAGE_DIR = None
 PRE_BLOSSOM_BLOCK_TARGET_SPACING = 150
@@ -995,22 +1001,23 @@ def prepare_wallets_for_mining(num_wallets, dirname, binary=None):
         miner_addresses.append(miner_address)
     return miner_addresses
 
-def start_wallets(num_wallets, dirname, extra_args=None, rpchost=None, binary=None):
+def start_wallets(num_wallets, dirname, extra_args=None, rpchost=None, binary=None, zallet_args=None):
     """
     Start multiple wallets, return RPC connections to them
     """
     if extra_args is None: extra_args = [ None for _ in range(num_wallets) ]
     if binary is None: binary = [ None for _ in range(num_wallets) ]
+    if zallet_args is None: zallet_args = [ None for _ in range(num_wallets) ]
     rpcs = []
     try:
         for i in range(num_wallets):
-            rpcs.append(start_wallet(i, dirname, extra_args[i], rpchost, binary=binary[i]))
+            rpcs.append(start_wallet(i, dirname, extra_args[i], rpchost, binary=binary[i], zallet_args=zallet_args[i]))
     except: # If one wallet failed to start, stop the others
         stop_wallets(rpcs)
         raise
     return rpcs
 
-def start_wallet(i, dirname, extra_args=None, rpchost=None, timewait=None, binary=None, stderr=None):
+def start_wallet(i, dirname, extra_args=None, rpchost=None, timewait=None, binary=None, stderr=None, zallet_args=None):
     """
     Start a Zallet wallet and return RPC connection to it
     """
@@ -1025,7 +1032,7 @@ def start_wallet(i, dirname, extra_args=None, rpchost=None, timewait=None, binar
     validator_port = rpc_port(i)
     zallet_port = wallet_rpc_port(i)
 
-    update_zallet_conf(datadir, validator_port, zallet_port)
+    update_zallet_conf(datadir, validator_port, zallet_port, zallet_args)
 
     # We prepare the wallet if it is new
     if prepare:
@@ -1054,7 +1061,7 @@ def start_wallet(i, dirname, extra_args=None, rpchost=None, timewait=None, binar
 
     return proxy
 
-def update_zallet_conf(datadir, validator_port, zallet_port):
+def update_zallet_conf(datadir, validator_port, zallet_port, extra_args=None):
     config_path = zallet_config(datadir)
 
     with open(config_path, "r", encoding="utf8") as f:
@@ -1062,6 +1069,24 @@ def update_zallet_conf(datadir, validator_port, zallet_port):
 
     config_file['rpc']['bind'][0] = '127.0.0.1:'+str(zallet_port)
     config_file['indexer']['validator_address'] = '127.0.0.1:'+str(validator_port)
+
+    extra_args = extra_args or ZalletArgs()
+
+    # Params that update_zallet_conf knows how to apply. Any param set on
+    # `extra_args` that is not authorized here is rejected rather than silently
+    # ignored.
+    AUTHORIZED_PARAMS = {"activation_heights"}
+    defaults = vars(ZalletArgs())
+    provided = {k for k, v in vars(extra_args).items() if v != defaults.get(k)}
+    assert provided <= AUTHORIZED_PARAMS, \
+        "Unsupported zallet params %s; authorized: %s" % (
+            sorted(provided - AUTHORIZED_PARAMS), sorted(AUTHORIZED_PARAMS))
+
+    if extra_args.activation_heights:
+        config_file.setdefault('consensus', {})
+        config_file['consensus']['network'] = 'regtest'
+        config_file['consensus']['regtest_nuparams'] = \
+            render_regtest_nuparams(extra_args.activation_heights)
 
     with open(config_path, "w", encoding="utf8") as f:
         toml.dump(config_file, f)
