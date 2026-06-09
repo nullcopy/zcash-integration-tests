@@ -29,6 +29,66 @@ class ZebraArgs:
         return self
 
 
+# Network-upgrade name -> consensus branch id (hex string), in activation
+# order. Branch ids must match those in
+# qa/rpc-tests/test_framework/util.py. Names accept both dotted and
+# underscore spellings (e.g. "NU6.1" / "NU6_1").
+_NU_BRANCH_IDS = [
+    ("Overwinter", "5ba81b19"),
+    ("Sapling", "76b809bb"),
+    ("Blossom", "2bb40e60"),
+    ("Heartwood", "f5b9230b"),
+    ("Canopy", "e9ff75a6"),
+    ("NU5", "c2d6d0b4"),
+    ("NU6", "c8e71055"),
+    ("NU6.1", "4dec4df0"),
+    ("NU6.2", "5437f330"),
+]
+
+# Upgrades before NU5. Zebra regtest activates these at height 1 when a later
+# upgrade is configured, so we emit them explicitly to keep zallet in sync.
+_PRE_NU5_NAMES = {"Overwinter", "Sapling", "Blossom", "Heartwood", "Canopy"}
+
+
+def render_regtest_nuparams(activation_heights):
+    """
+    Translate a {NU name: height} dict (the same shape as
+    ZebraArgs.activation_heights) into zallet's `regtest_nuparams` list,
+    i.e. ["<branch-id hex>:<height>", ...].
+    """
+    requested = {
+        name.replace("_", "."): height
+        for name, height in (activation_heights or {}).items()
+    }
+    nuparams = []
+    for name, branch_id in _NU_BRANCH_IDS:
+        if name in requested:
+            height = requested[name]
+        elif name in _PRE_NU5_NAMES:
+            height = 1
+        else:
+            continue
+        nuparams.append("%s:%d" % (branch_id, height))
+    return nuparams
+
+
+@dataclass
+class ZalletArgs:
+    # Network-upgrade activation heights for the wallet, using the same
+    # {NU name: height} shape as ZebraArgs.activation_heights so the wallet
+    # can be configured to match the node.
+    activation_heights: dict[str, int] = field(default_factory=dict)
+
+    def __add__(self, other):
+        if other is None:
+            return self
+
+        defaults = ZalletArgs()
+        if other.activation_heights != defaults.activation_heights:
+            self.activation_heights = other.activation_heights
+        return self
+
+
 @dataclass
 class ZebraConfig:
     network_listen_address: str = "127.0.0.1:0"
