@@ -45,7 +45,7 @@ class RPCBindTest(BitcoinTestFramework):
         matches the expected set.
         '''
         expected = [(addr_to_hex(addr), port) for (addr, port) in expected]
-        base_args = ['-disablewallet', '-nolisten']
+        base_args = ['-nolisten']
         if allow_ips:
             base_args += ['-rpcallowip=' + x for x in allow_ips]
         binds = ['-rpcbind='+addr for addr in addresses]
@@ -62,7 +62,7 @@ class RPCBindTest(BitcoinTestFramework):
         Start a node with rpcwallow IP, and request getinfo
         at a non-localhost IP.
         '''
-        base_args = ['-disablewallet', '-nolisten'] + ['-rpcallowip='+x for x in allow_ips]
+        base_args = ['-nolisten'] + ['-rpcallowip='+x for x in allow_ips]
         self.nodes = start_nodes(self.num_nodes, self.options.tmpdir, [base_args])
         try:
             # connect to node through non-loopback interface
