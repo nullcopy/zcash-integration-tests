@@ -205,6 +205,8 @@ def sync_mempools(nodes, wallets=None, wait=0.5, timeout=60):
     """
     Wait until everybody has the same transactions in their memory
     pools, and has notified all internal listeners of them
+
+    Returns `True` when all wallets are in synced, or if no wallet is given.
     """
     while timeout > 0:
         pool = set(nodes[0].getrawmempool())
