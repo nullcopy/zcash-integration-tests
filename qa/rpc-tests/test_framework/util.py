@@ -181,7 +181,7 @@ def sync_blocks(nodes, wallets=None, wait=0.125, timeout=60, allow_different_tip
         time.sleep(wait)
         timeout -= wait
 
-    if not not wallets:
+    if wallets:
         # Now that the block counts are in sync, wait for the internal
         # notifications to finish. `getwalletstatus` omits `wallet_tip` until
         # the wallet has a committed tip, so treat its absence as "not synced
@@ -219,7 +219,7 @@ def sync_mempools(nodes, wallets=None, wait=0.5, timeout=60):
         time.sleep(wait)
         timeout -= wait
 
-    if not not wallets:
+    if wallets:
         # Now that the mempools are in sync, wait for the internal
         # notifications to finish. `getwalletstatus` omits `wallet_tip` until
         # the wallet has a committed tip, so treat its absence as "not synced
